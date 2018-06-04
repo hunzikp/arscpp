@@ -1,0 +1,4 @@
+exportPattern("^[[:alpha:]]+")
+import(Rcpp)
+import(Matrix)
+useDynLib(arscpp, .registration = TRUE)
