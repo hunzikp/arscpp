@@ -96,7 +96,7 @@ plnposterior <- function(y, mu, sd) {
 #' smp <- mpln$sample(100, x) # x are starting values
 #'
 mplnposterior <- function(y, mu, H) {
-  H <- as(H, 'dsCMatrix')
+  H <- as(H, 'dgCMatrix')
   MPLNPosterior$new(y, mu, H)
 }
 
