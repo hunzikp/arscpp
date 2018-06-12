@@ -7,7 +7,7 @@ Maintainer: Philipp Hunziker <hunzikp@gmail.com>
 Description: Provides a C++ implementation of Wild and Gilks' (1993) Adaptive Rejection Sampler
     for sampling from univariate log-concave densities. Also implements efficient samplers for the 
     Poisson-Log-Normal (PLN) and multivariate PLN posteriors using ARS and a Gibbs sampler.
-License: What license is it under?
+License: GPL-3
 Encoding: UTF-8
 LazyData: true
 Imports:
