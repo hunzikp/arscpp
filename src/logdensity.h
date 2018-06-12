@@ -19,7 +19,7 @@ class RLogDensity : public LogDensity {
 public:
   Function R_h;
   Function R_h_prime;
-  
+
   RLogDensity(Function R_h, Function R_h_prime);
   NumericVector h(NumericVector x);
   NumericVector h_prime(NumericVector x);
@@ -36,6 +36,9 @@ public:
   double sigma;
 
   PoissonLogNormal(double y, double mu, double sigma);
+
+  NumericVector clean(NumericVector x);
+
   NumericVector h(NumericVector x);
   NumericVector h_prime(NumericVector x);
   double h(double x);
