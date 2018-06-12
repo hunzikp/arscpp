@@ -1,8 +1,12 @@
 // [[Rcpp::depends(RcppArmadillo)]]
-// [[Rcpp::plugins(cpp17)]]
+// [[Rcpp::plugins(cpp11)]]
+
+#define ARMA_64BIT_WORD 1
 
 #include <RcppArmadillo.h>
 #include "logdensity.h"
+#include <ctime>
+#include "lambertW.h"
 using namespace Rcpp;
 using namespace std;
 
@@ -117,13 +121,14 @@ public:
     for (int i = 0; i < n_segments; ++i) {
       HullSegment segment;
       segment = segments.at(i);
-      double cu_i = (1/segment.hpx)*(exp(segment.hu_right) - exp(segment.hu_left));
+      // double cu_i = (1/segment.hpx)*(exp(segment.hu_right) - exp(segment.hu_left));
       double log_cu_i;
       if (segment.hpx > 0) {
         log_cu_i = -log(segment.hpx) + logdiffexp(segment.hu_right, segment.hu_left);
       } else {
         log_cu_i = logdiffexp(segment.hu_left - log(-segment.hpx), segment.hu_right - log(-segment.hpx));
       }
+
       if (i == 0) {
         log_cu = log_cu_i;
       } else {
@@ -319,6 +324,8 @@ public:
   double xrb;
   int max_points;
 
+  const static int MAX_REJECTIONS = 500;
+
   ARS() {}; // Default constructor
 
   ARS(LogDensity* const log_density, NumericVector x, double xlb, double xrb, int max_points) :
@@ -403,6 +410,7 @@ public:
         x.at(last_ind) = x_right;
         hx.at(last_ind) = log_density->h(x_right);
       } else {
+        Rcout << "x candidates: " << x << endl;
         stop("Could not find valid upper starting point.");
       }
     }
@@ -415,6 +423,7 @@ public:
   NumericVector sample(unsigned N, LogDensity* const log_density) {
 
     vector<double> samples;
+    int rejections = 0;
     while(samples.size() < N) {
 
       double x_sample = upper_hull.sample();
@@ -422,6 +431,7 @@ public:
       if (u < exp(lower_hull.get_hl(x_sample) - upper_hull.get_hu(x_sample))) {
         // Accept!
         samples.push_back(x_sample);
+        rejections = 0;
       } else {
 
         double hx = log_density->h(x_sample);
@@ -429,8 +439,10 @@ public:
         if (u < exp(hx - upper_hull.get_hu(x_sample))) {
           // Accept!
           samples.push_back(x_sample);
+          rejections = 0;
         } else {
           // Reject!
+          rejections++;
         }
 
         // Add hull segment
@@ -441,6 +453,13 @@ public:
           lower_hull.add_segment(x_sample, hx, hpx);
         }
       }
+
+      if (rejections > MAX_REJECTIONS) {
+        Rcout << "Warning: Maximum number of rejections reached. Returning zero sample." << endl;
+        samples.push_back(0);
+      }
+
+      checkUserInterrupt();
     }
 
     return wrap(samples);
@@ -480,6 +499,12 @@ public:
   }
 };
 
+double get_plnp_map(const double &mu, const double &sigma2, const double &y) {
+  // Returns the PLN MAP estimate
+  double W = lambertW0_CS(sigma2*exp(mu + sigma2*y));
+  return -1*W + mu  + sigma2*y;
+}
+
 class PLNPosterior {
 // Class for sampling from Poisson Log-Normal posterior, i.e.
 // p(x_i | y) \propto dpois(y_i | exp(x_i)) * dnorm(x_i | mu_i, sigma_i)
@@ -510,8 +535,14 @@ public:
       PoissonLogNormal log_density(y.at(i), mu.at(i), sigma.at(i));
       densities.push_back(log_density);
 
+      // MAP estimate
+      double x_map = get_plnp_map(mu.at(i), pow(sigma.at(i), 2), y.at(i));
+      if (!isfinite(x_map)) {
+        x_map = log(y.at(i)+1);
+      }
+
       // Starting points
-      NumericVector x = NumericVector::create(log(y.at(i)+1)-1, log(y.at(i)+1)+1);
+      NumericVector x = NumericVector::create(x_map-1, x_map+1);
 
       // Sampler
       ARS ars(&densities.at(i), x, -numeric_limits<double>::infinity(), numeric_limits<double>::infinity(), 100);
@@ -556,26 +587,30 @@ public:
       stop("H must be of dimension NxN.");
     }
 
-    // Prepare vector of neighbors for each unit (containing H value and col number)
+    // Initialize the neighbors vectors
     for (int i = 0; i < N; ++i) {
-
       vector<pair<int, double> > i_neighbors;
-      arma::sp_mat::row_iterator it = H.begin_row(i);
-      arma::sp_mat::row_iterator it_end = H.end_row(i);
-      for(; it != it_end; ++it) {
-        int col = it.col();
-        if (col != i) {
-          double val = (*it);
-          pair<int, double> neighbor = pair<int, double>(col, val);
-          i_neighbors.push_back(neighbor);
-        }
-      }
-
       neighbors.push_back(i_neighbors);
+    }
+
+    // Populate the neighbors vectors
+    arma::sp_mat::iterator it = H.begin();
+    arma::sp_mat::iterator it_end = H.end();
+    for(; it != it_end; ++it) {
+      int col = it.col();
+      int row = it.row();
+      if (col != row) {
+        double val = (*it);
+        pair<int, double> neighbor = pair<int, double>(col, val);
+        neighbors.at(row).push_back(neighbor);
+      }
     }
   };
 
   NumericMatrix sample(int M, arma::colvec x_init) {
+
+    double prepare_time = 0;
+    double sample_time = 0;
 
     if (x_init.size() != N) {
       stop("x_init is of incorrect size.");
@@ -601,15 +636,44 @@ public:
         }
         double mu_bar = mu_i - sigma2_bar*hxm;
 
-        // Sample using ARS
+        // Determine whether y is missing; if so, just sample from prior
         double y_i = y.at(i);
-        PoissonLogNormal log_density(y_i, mu_bar, sqrt(sigma2_bar));
-        NumericVector x_init = NumericVector::create(log(y_i+1)-1, log(y_i+1)+1);
-        ARS ars(&log_density, x_init, -numeric_limits<double>::infinity(), numeric_limits<double>::infinity(), 100);
-        NumericVector smp = ars.sample(1, &log_density);
+        if (NumericVector::is_na(y_i)) {
 
-        // Assign
-        x.at(i) = smp.at(0);
+          // Sample from normal
+          double smp = R::rnorm(mu_bar, sqrt(sigma2_bar));
+
+          // Assign
+          x.at(i) = smp;
+
+        } else {
+
+          // Determine starting values via MAP estimate
+          double x_map = get_plnp_map(mu_bar, sigma2_bar, y_i);
+          if (!isfinite(x_map)) {
+            x_map = log(y_i+1);
+          }
+
+          // Sample using ARS
+          PoissonLogNormal log_density(y_i, mu_bar, sqrt(sigma2_bar));
+          NumericVector x_init = NumericVector::create(x_map - 3, x_map + 3);
+          ARS ars(&log_density, x_init, -numeric_limits<double>::infinity(), numeric_limits<double>::infinity(), 100);
+          NumericVector smp = ars.sample(1, &log_density);
+
+          // Some error checking..
+          if (smp.at(0) == 0) {
+            Rcout << "Zero sample detected. Offending parameters..." << endl;
+            Rcout << "mu_bar: " << mu_bar << endl;
+            Rcout << "sigma2_bar: " << sigma2_bar << endl;
+            Rcout << "y: " << y_i << endl;
+            Rcout << "i: " << i << endl;
+          }
+
+          // Assign
+          x.at(i) = smp.at(0);
+        }
+
+        checkUserInterrupt();
       }
       NumericVector x_j = wrap(x);
       out(j,_) = x_j;
