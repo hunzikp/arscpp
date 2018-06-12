@@ -21,6 +21,16 @@ test_that("sampling distribution is correct", {
   expect_equal(cor(E_x, x) > 0.9, TRUE)
 })
 
+test_that("sampling distribution is correct if there are missings", {
+  set.seed(0)
+  y[sample(length(y), size = 5, replace = FALSE)] <- NA
+  mpln <- mplnposterior(y, mu, H)
+  smp <- mpln$sample(100, x)
+  expect_equal(dim(smp), c(100, N))
+  E_x <- colMeans(smp)
+  expect_equal(cor(E_x, x) > 0.9, TRUE)
+})
+
 test_that("fails if arguments are of unequal size", {
   expect_error(mpln <- plnposterior(1, mu, H))
   expect_error(mpln <- plnposterior(y, 1, H))
