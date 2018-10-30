@@ -45,4 +45,23 @@ public:
   double h_prime(double x);
 };
 
+class NegBinLogNormal : public LogDensity {
+  // Log Density of negative-binomial-log-normal posterior
+  // log(negbin(y; exp(z), r)) + log(norm(z; mu, sigma^2))
+public:
+  double y;
+  double mu;
+  double sigma;
+  double r;
+
+  NegBinLogNormal(double y, double mu, double sigma, double r);
+
+  NumericVector clean(NumericVector x);
+
+  NumericVector h(NumericVector x);
+  NumericVector h_prime(NumericVector x);
+  double h(double x);
+  double h_prime(double x);
+};
+
 #endif

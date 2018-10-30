@@ -100,4 +100,63 @@ mplnposterior <- function(y, mu, H) {
   MPLNPosterior$new(y, mu, H)
 }
 
+#' Sample from a Negative-Binomial-Log-Normal posterior
+#'
+#' \code{nblnposterior} returns an object for sampling from the NBLN posterior.
+#'
+#' The returned object samples from
+#'
+#' \deqn{x \sim p(x | y, \mu, sd, r) \propto dNegBin(y; exp(x), r) \times dNorm(x; \mu, sd)}
+#'
+#' @param y A numeric vector of counts.
+#' @param mu A numeric vector of prior means (must be of same length as \code{y}).
+#' @param sd A numeric vector of prior sds (must be of same length as \code{y}).
+#' @param r A numeric vector of sizes / dispersions (must be of same length as \code{y}).
+#'
+#' @return A \code{NBLNPosterior} object.
+#'
+#' @examples
+#' N <- 100
+#' mu <- rep(0, N)
+#' sd <- rep(1, N)
+#' r <- rep(5, N)
+#' x <- rnorm(N, mu, sd)
+#' y <- rnbinom(N, mu = exp(x), size = r)
+#' nbln <- nblnposterior(y, mu, sd, r)
+#' smp <- nbln$sample(100)
+#'
+nblnposterior <- function(y, mu, sd, r) {
+  NBLNPosterior$new(y, mu, sd, r)
+}
 
+#' Sample from a multivariate Negative-Binomial-Log-Normal posterior
+#'
+#' \code{mnblnposterior} returns an object for sampling from the MNBLN posterior
+#' using an ARS-in-Gibbs sampler.
+#'
+#' The returned object samples from
+#'
+#' \deqn{x \sim p(x | y, \mu, \Sigma, r) \propto \prod_i [dNegBin(y_i; exp(x_i), r_i)] \times dMVNorm(x; \mu, \Sigma)}
+#'
+#' @param y A numeric vector of counts of size N.
+#' @param mu The prior mean vector of size N.
+#' @param H A sparse precision matrix of size NxN, preferably in 'dsCMatrix' (sparse column) format.
+#' @param r A numeric vector of sizes / dispersions of size N.
+#'
+#' @return A \code{MNBLNPosterior} object.
+#'
+#' @examples
+#' N <- 100
+#' mu <- rep(0, N)
+#' sd <- rep(2, N)
+#' r <- rep(5, N)
+#' x <- rnorm(N, mu, sd)
+#' y <- rnbinom(N, mu = exp(x), size = r)
+#' H <- as(diag(1/(sd^2)), 'dsCMatrix')
+#' mnbln <- mnblnposterior(y, mu, H, r)
+#' smp <- mnbln$sample(100, x) # x are starting values
+#'
+mnblnposterior <- function(y, mu, H, r) {
+  H <- as(H, 'dgCMatrix')
+  MNBLNPosterior$new(y, mu, H, r)
+}

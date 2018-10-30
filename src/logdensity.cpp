@@ -67,3 +67,39 @@ double PoissonLogNormal::h_prime(double x) {
 }
 
 
+// NegBinLogNormal implementation
+NegBinLogNormal::NegBinLogNormal(double y, double mu, double sigma, double r) :
+  y(y), mu(mu), sigma(sigma), r(r) {}
+
+NumericVector NegBinLogNormal::clean(NumericVector x) {
+  // ensure x is below 700 (max value for which we can compute exp)
+  for (int i = 0; i < x.size(); ++i) {
+    if (x.at(i) > 700) {
+      x.at(i) = 700;
+    }
+  }
+  return x;
+}
+
+NumericVector NegBinLogNormal::h(NumericVector x) {
+  x = clean(x);
+  NumericVector rv = x*y - (r+y)*log(exp(x) + r) - 0.5*pow(sigma, -2)*pow(x - mu, 2);
+  return rv;
+}
+
+NumericVector NegBinLogNormal::h_prime(NumericVector x) {
+  x = clean(x);
+  NumericVector rv = y - (r+y)*exp(x)*pow(exp(x) + r, -1) - pow(sigma, -2)*(x - mu);
+  return rv;
+}
+
+double NegBinLogNormal::h(double x) {
+  NumericVector rv = h(wrap(x));
+  return rv.at(0);
+}
+
+double NegBinLogNormal::h_prime(double x) {
+  NumericVector rv = h_prime(wrap(x));
+  return rv.at(0);
+}
+

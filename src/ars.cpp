@@ -683,6 +683,184 @@ public:
   };
 };
 
+class NBLNPosterior {
+  // Class for sampling from Negative Binomial Log-Normal posterior, i.e.
+  // p(x_i | y) \propto dnbinom(y_i | exp(x_i), r_i) * dnorm(x_i | mu_i, sigma_i)
+public:
+
+  NumericVector mu;
+  NumericVector y;
+  NumericVector sigma;
+  NumericVector r;
+  vector<ARS> samplers;
+  vector<NegBinLogNormal> densities;
+  int N;
+
+  NBLNPosterior(NumericVector y, NumericVector mu, NumericVector sigma, NumericVector r) :
+    mu(mu),
+    y(y),
+    sigma(sigma),
+    r(r) {
+
+    // Check arguments
+    N = mu.size();
+    if (y.size() != N || sigma.size() != N || r.size() != N) {
+      stop("y, mu, sigma, and r must be of same length.");
+    }
+
+    // Make the samplers
+    for (int i = 0; i < N; ++i) {
+
+      // PLN log density
+      NegBinLogNormal log_density(y.at(i), mu.at(i), sigma.at(i), r.at(i));
+      densities.push_back(log_density);
+
+      // MAP estimate
+      double x_map = log(y.at(i)+1);
+
+      // Starting points
+      NumericVector x = NumericVector::create(x_map-1, x_map+1);
+
+      // Sampler
+      ARS ars(&densities.at(i), x, -numeric_limits<double>::infinity(), numeric_limits<double>::infinity(), 100);
+      samplers.push_back(ars);
+    }
+  };
+
+  NumericMatrix sample(int M) {
+
+    NumericMatrix out(M, N);
+    for (int i = 0; i < N; ++i) {
+      NumericVector smp_i = samplers.at(i).sample(M, &densities.at(i));
+      out(_,i) = smp_i;
+    }
+    return out;
+  };
+};
+
+class MNBLNPosterior {
+public:
+  arma::colvec mu;
+  arma::colvec y;
+  arma::sp_mat H;
+  arma::colvec sigma2ii;
+  arma::colvec r;
+  vector<vector<pair<int, double> > > neighbors; // For each row: <index, value> of i's neighbors
+  int N;
+
+  MNBLNPosterior(arma::colvec y, arma::colvec mu, arma::sp_mat H, arma::colvec r) :
+    y(y),
+    mu(mu),
+    H(H),
+    r(r){
+
+    arma::colvec Hdiag(H.diag());
+    sigma2ii = 1/Hdiag;
+    N = y.size();
+
+    // Check arguments
+    if (mu.size() != N) {
+      stop("y and mu must be of same length.");
+    }
+    if (r.size() != N) {
+      stop("y and r must be of same length.");
+    }
+    if (int(H.n_cols) != N) {
+      stop("H must be of dimension NxN.");
+    }
+
+    // Initialize the neighbors vectors
+    for (int i = 0; i < N; ++i) {
+      vector<pair<int, double> > i_neighbors;
+      neighbors.push_back(i_neighbors);
+    }
+
+    // Populate the neighbors vectors
+    arma::sp_mat::iterator it = H.begin();
+    arma::sp_mat::iterator it_end = H.end();
+    for(; it != it_end; ++it) {
+      int col = it.col();
+      int row = it.row();
+      if (col != row) {
+        double val = (*it);
+        pair<int, double> neighbor = pair<int, double>(col, val);
+        neighbors.at(row).push_back(neighbor);
+      }
+    }
+  };
+
+  NumericMatrix sample(int M, arma::colvec x_init) {
+
+    double prepare_time = 0;
+    double sample_time = 0;
+
+    if (x_init.size() != N) {
+      stop("x_init is of incorrect size.");
+    }
+
+    NumericMatrix out(M, N);
+    arma::colvec x = x_init;
+
+    for (int j = 0; j < M; ++j) {
+      for (int i = 0; i < N; ++i) {
+
+        // Get variance (sigma2_bar) of x_i | x_not_i
+        double sigma2_bar = sigma2ii.at(i);
+
+        // Get mean (mu_bar) of x_i | x_not_i
+        double mu_i = mu.at(i);
+        double hxm = 0;  // H[i,-i]*(x[-i]-mu[-i])
+        vector<pair<int, double> > i_neighbors = neighbors.at(i);
+        vector<pair<int, double> >::iterator it = i_neighbors.begin();
+        vector<pair<int, double> >::iterator it_end = i_neighbors.end();
+        for (; it != it_end; ++it) {
+          hxm += (it->second)*(x.at(it->first) - mu.at(it->first));
+        }
+        double mu_bar = mu_i - sigma2_bar*hxm;
+
+        // Determine whether y is missing; if so, just sample from prior
+        double y_i = y.at(i);
+        if (NumericVector::is_na(y_i)) {
+
+          // Sample from normal
+          double smp = R::rnorm(mu_bar, sqrt(sigma2_bar));
+
+          // Assign
+          x.at(i) = smp;
+
+        } else {
+
+          // Determine starting values via approximate MAP estimate
+          double x_map = x_map = log(y_i+1);
+
+          // Sample using ARS
+          NegBinLogNormal log_density(y_i, mu_bar, sqrt(sigma2_bar), r.at(i));
+          NumericVector x_init = NumericVector::create(x_map - 3, x_map + 3);
+          ARS ars(&log_density, x_init, -numeric_limits<double>::infinity(), numeric_limits<double>::infinity(), 100);
+          NumericVector smp = ars.sample(1, &log_density);
+
+          // Some error checking..
+          if (smp.at(0) == 0) {
+            Rcout << "Zero sample detected. Offending parameters..." << endl;
+            Rcout << "mu_bar: " << mu_bar << endl;
+            Rcout << "sigma2_bar: " << sigma2_bar << endl;
+            Rcout << "y: " << y_i << endl;
+            Rcout << "i: " << i << endl;
+          }
+
+          // Assign
+          x.at(i) = smp.at(0);
+        }
+
+        checkUserInterrupt();
+      }
+      NumericVector x_j = wrap(x);
+      out(j,_) = x_j;
+    }
+
+    return out;
+  };
+};
 
 RCPP_MODULE(hull) {
   class_<ARS_Rwrapper>("ARS_Rwrapper")
@@ -702,5 +880,15 @@ RCPP_MODULE(hull) {
   class_<MPLNPosterior>("MPLNPosterior")
     .constructor<arma::colvec, arma::colvec, arma::sp_mat>()
     .method("sample", &MPLNPosterior::sample)
+  ;
+
+  class_<NBLNPosterior>("NBLNPosterior")
+    .constructor<NumericVector, NumericVector, NumericVector, NumericVector>()
+    .method("sample", &NBLNPosterior::sample)
+  ;
+
+  class_<MNBLNPosterior>("MNBLNPosterior")
+    .constructor<arma::colvec, arma::colvec, arma::sp_mat, arma::colvec>()
+    .method("sample", &MNBLNPosterior::sample)
   ;
 }
